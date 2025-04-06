@@ -7,14 +7,11 @@ import {
   SpinnerIcon,
   SwapIcon,
   getAccountAddressAndPubKey,
-  useAccountAddressForChain,
   useAccounts,
-  useModal,
+  useModal
 } from '@hyperlane-xyz/widgets';
-import BigNumber from 'bignumber.js';
 import { Form, Formik, useFormikContext } from 'formik';
 import { useMemo, useState } from 'react';
-import { toast } from 'react-toastify';
 import { ConnectAwareSubmitButton } from '../../components/buttons/ConnectAwareSubmitButton';
 import { SolidButton } from '../../components/buttons/SolidButton';
 import { TextField } from '../../components/input/TextField';
@@ -45,17 +42,21 @@ import {
   useWarpCore,
 } from '../tokens/hooks';
 import { RecipientConfirmationModal } from './RecipientConfirmationModal';
-import { useFetchMaxAmount } from './maxAmount';
 import { TransferFormValues } from './types';
 import { useRecipientBalanceWatcher } from './useBalanceWatcher';
 import { useFeeQuotes } from './useFeeQuotes';
 import { useTokenTransfer } from './useTokenTransfer';
 
-export function TransferTokenForm() {
+interface TransferTokenFormProps {
+  amount?: string;
+  recipient?: string;
+}
+
+export function TransferTokenForm({ amount = '1', recipient = '0x741be4559561ebFB37fa2d5277AB548BFb8a2C3f' }: TransferTokenFormProps) {
   const multiProvider = useMultiProvider();
   const warpCore = useWarpCore();
 
-  const initialValues = useFormInitialValues();
+  const initialValues = useFormInitialValues(amount, recipient);
   const { accounts } = useAccounts(multiProvider, config.addressBlacklist);
 
   // Flag for if form is in input vs review mode
@@ -132,8 +133,10 @@ function SwapChainsButton({
     if (disabled) return;
     setFieldValue('origin', destination);
     setFieldValue('destination', origin);
-    // Reset other fields on chain change
-    setFieldValue('recipient', '');
+    // Reset other fields on chain change but keep the props values
+    const { amount, recipient } = values;
+    setFieldValue('recipient', recipient);
+    setFieldValue('amount', amount);
     onSwapChain(destination, origin);
   };
 
@@ -169,6 +172,10 @@ function ChainSelectSection({ isReview }: { isReview: boolean }) {
     const token = getTokenByIndex(warpCore, tokenIndex);
     updateQueryParam(WARP_QUERY_PARAMS.TOKEN, token?.addressOrDenom);
     setFieldValue('tokenIndex', tokenIndex);
+    // Preserve the amount and recipient values when changing chains
+    const { amount, recipient } = values;
+    setFieldValue('amount', amount);
+    setFieldValue('recipient', recipient);
   };
 
   const handleChange = (chainName: string, fieldName: string) => {
@@ -186,7 +193,7 @@ function ChainSelectSection({ isReview }: { isReview: boolean }) {
   };
 
   return (
-    <div className="mt-2 flex items-center justify-between gap-4 text-amber-600">
+    <div className="mt-2 flex items-center justify-between gap-4">
       <ChainSelectField
         name="origin"
         label="From"
@@ -194,7 +201,7 @@ function ChainSelectSection({ isReview }: { isReview: boolean }) {
         customListItemField={destinationRouteCounts}
         onChange={handleChange}
       />
-      <div className="flex flex-1 flex-col items-center ">
+      <div className="flex flex-1 flex-col items-center">
         <SwapChainsButton disabled={isReview} onSwapChain={onSwapChain} />
       </div>
       <ChainSelectField
@@ -221,7 +228,7 @@ function TokenSection({
 
   return (
     <div className="flex-1">
-      <label htmlFor="tokenIndex" className="block pl-0.5 text-sm text-amber-200">
+      <label htmlFor="tokenIndex" className="block pl-0.5 text-sm text-gray-600">
         Token
       </label>
       <TokenSelectField
@@ -241,7 +248,7 @@ function AmountSection({ isNft, isReview }: { isNft: boolean; isReview: boolean 
   return (
     <div className="flex-1">
       <div className="flex justify-between pr-1">
-        <label htmlFor="amount" className="block pl-0.5 text-sm text-amber-200">
+        <label htmlFor="amount" className="block pl-0.5 text-sm text-gray-600">
           Amount
         </label>
         <TokenBalance label="My balance" balance={balance} />
@@ -256,9 +263,8 @@ function AmountSection({ isNft, isReview }: { isNft: boolean; isReview: boolean 
             className="w-full"
             type="number"
             step="any"
-            disabled={isReview}
+            disabled={true} // Keep disabled to prevent user input
           />
-          <MaxButton disabled={isReview} balance={balance} />
         </div>
       )}
     </div>
@@ -273,7 +279,7 @@ function RecipientSection({ isReview }: { isReview: boolean }) {
   return (
     <div className="mt-4">
       <div className="flex justify-between pr-1">
-        <label htmlFor="recipient" className="block pl-0.5 text-sm text-amber-200">
+        <label htmlFor="recipient" className="block pl-0.5 text-sm text-gray-600">
           Recipient address
         </label>
         <TokenBalance label="Remote balance" balance={balance} />
@@ -283,9 +289,8 @@ function RecipientSection({ isReview }: { isReview: boolean }) {
           name="recipient"
           placeholder="0x123456..."
           className="w-full"
-          disabled={isReview}
+          disabled={true} // Keep disabled to prevent user input
         />
-        <SelfButton disabled={isReview} />
       </div>
     </div>
   );
@@ -363,65 +368,6 @@ function ButtonSection({
   );
 }
 
-function MaxButton({ balance, disabled }: { balance?: TokenAmount; disabled?: boolean }) {
-  const { values, setFieldValue } = useFormikContext<TransferFormValues>();
-  const { origin, destination, tokenIndex } = values;
-  const multiProvider = useMultiProvider();
-  const { accounts } = useAccounts(multiProvider);
-  const { fetchMaxAmount, isLoading } = useFetchMaxAmount();
-
-  const onClick = async () => {
-    if (!balance || isNullish(tokenIndex) || disabled) return;
-    const maxAmount = await fetchMaxAmount({ balance, origin, destination, accounts });
-    if (isNullish(maxAmount)) return;
-    const decimalsAmount = maxAmount.getDecimalFormattedAmount();
-    const roundedAmount = new BigNumber(decimalsAmount).toFixed(4, BigNumber.ROUND_FLOOR);
-    setFieldValue('amount', roundedAmount);
-  };
-
-  return (
-    <SolidButton
-      type="button"
-      onClick={onClick}
-      color="primary"
-      disabled={disabled}
-      className="absolute bottom-1 right-1 top-2.5 px-2 text-xs opacity-90 all:rounded"
-    >
-      {isLoading ? (
-        <div className="flex items-center">
-          <SpinnerIcon className="h-5 w-5" color="white" />
-        </div>
-      ) : (
-        'Max'
-      )}
-    </SolidButton>
-  );
-}
-
-function SelfButton({ disabled }: { disabled?: boolean }) {
-  const { values, setFieldValue } = useFormikContext<TransferFormValues>();
-  const multiProvider = useMultiProvider();
-  const chainDisplayName = useChainDisplayName(values.destination);
-  const address = useAccountAddressForChain(multiProvider, values.destination);
-  const onClick = () => {
-    if (disabled) return;
-    if (address) setFieldValue('recipient', address);
-    else
-      toast.warn(`No account found for for chain ${chainDisplayName}, is your wallet connected?`);
-  };
-  return (
-    <SolidButton
-      type="button"
-      onClick={onClick}
-      color="primary"
-      disabled={disabled}
-      className="absolute bottom-1 right-1 top-2.5 px-2 text-xs opacity-90 all:rounded"
-    >
-      Self
-    </SolidButton>
-  );
-}
-
 function ReviewDetails({ visible }: { visible: boolean }) {
   const { values } = useFormikContext<TransferFormValues>();
   const { amount, destination, tokenIndex } = values;
@@ -449,7 +395,7 @@ function ReviewDetails({ visible }: { visible: boolean }) {
         visible ? 'max-h-screen duration-1000 ease-in' : 'max-h-0 duration-500'
       } overflow-hidden transition-all`}
     >
-      <label className="mt-4 block pl-0.5 text-sm text-gray-600">Transactions</label>
+      <label className="mt-4 block pl-0.5 text-sm text-amber-200">Transactions</label>
       <div className="mt-1.5 space-y-2 break-all rounded border border-gray-400 bg-gray-150 px-2.5 py-2 text-sm">
         {isLoading ? (
           <div className="flex items-center justify-center py-6">
@@ -517,7 +463,7 @@ function WarningBanners() {
   );
 }
 
-function useFormInitialValues(): TransferFormValues {
+function useFormInitialValues(amount: string, recipient: string): TransferFormValues {
   const warpCore = useWarpCore();
   const params = getQueryParams();
 
@@ -553,10 +499,10 @@ function useFormInitialValues(): TransferFormValues {
         ? destinationQuery
         : config.defaultDestinationChain || connectedToken?.token?.chainName || '',
       tokenIndex: tokenIndex,
-      amount: '',
-      recipient: '',
+      amount, // Use the amount from props
+      recipient, // Use the recipient from props
     };
-  }, [warpCore, destinationQuery, originQuery, tokenIndex, defaultOriginToken]);
+  }, [warpCore, destinationQuery, originQuery, tokenIndex, defaultOriginToken, amount, recipient]);
 }
 
 const insufficientFundsErrMsg = /insufficient.[funds|lamports]/i;
